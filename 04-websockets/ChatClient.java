@@ -35,7 +35,34 @@ public class ChatClient {
          *   Notice: there's no request/response here. You send whenever you like, and
          *   PrintingListener prints whatever the server pushes, whenever it pushes it.
          */
-        throw new UnsupportedOperationException("TODO(5) not implemented yet");
+        WebSocket ws = HttpClient.newHttpClient().newWebSocketBuilder()
+                .buildAsync(uri, new PrintingListener()).join();
+        System.out.println("Connected as " + user + ". Type a message or /quit.");
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(System.in))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.equals("/quit")) {
+                    ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye").join();
+                    break;
+                }
+                ws.sendText("{\"type\":\"message\",\"text\":" + escapeJson(line) + "}", true).join();
+            }
+        }
+    }
+
+    static String escapeJson(String text) {
+        StringBuilder b = new StringBuilder("\"");
+        for (char ch : text.toCharArray()) {
+            switch (ch) {
+                case '"' -> b.append("\\\"");
+                case '\\' -> b.append("\\\\");
+                case '\n' -> b.append("\\n");
+                case '\r' -> b.append("\\r");
+                case '\t' -> b.append("\\t");
+                default -> { if (ch < 32) b.append(String.format("\\u%04x", (int) ch)); else b.append(ch); }
+            }
+        }
+        return b.append('"').toString();
     }
 
     /** Called by the JDK whenever the server pushes something. (given) */

@@ -68,7 +68,11 @@ public class ChatServer {
      * Hints: MessageDigest.getInstance("SHA-1"), Base64.getEncoder()
      */
     static String acceptKey(String secWebSocketKey) throws Exception {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        if (secWebSocketKey == null || secWebSocketKey.isBlank())
+            throw new IllegalArgumentException("Missing Sec-WebSocket-Key");
+        byte[] digest = MessageDigest.getInstance("SHA-1").digest(
+            (secWebSocketKey.trim() + WEBSOCKET_GUID).getBytes(StandardCharsets.US_ASCII));
+        return Base64.getEncoder().encodeToString(digest);
     }
 
     /**
@@ -79,7 +83,8 @@ public class ChatServer {
      *   Use broadcast(...) below.
      */
     static void onOpen(Client c) {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        ROOMS.computeIfAbsent(c.room, k -> ConcurrentHashMap.newKeySet()).add(c);
+        broadcast(c.room, system(c.room, c.user + " joined"), null);
     }
 
     /**
@@ -92,7 +97,31 @@ public class ChatServer {
      *   - anything else                    -> c.send({"type":"error","text":"unknown message type"})
      */
     static void onMessage(Client c, String text) throws IOException {
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+        Map<String, Object> data;
+        try {
+            Object parsed = Json.parse(text);
+            if (!(parsed instanceof Map<?, ?> parsedMap)) throw new IllegalArgumentException("Not an object");
+            data = new HashMap<>();
+            for (var entry : parsedMap.entrySet()) data.put(String.valueOf(entry.getKey()), entry.getValue());
+        } catch (RuntimeException ex) {
+            c.send(Json.write(Map.of("type", "error", "text", "invalid JSON")));
+            return;
+        }
+        String type = String.valueOf(data.get("type"));
+        switch (type) {
+            case "message" -> {
+                Object value = data.get("text");
+                if (!(value instanceof String message) || message.isBlank()) return;
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("type", "message");
+                payload.put("from", c.user);
+                payload.put("text", message);
+                payload.put("at", System.currentTimeMillis());
+                broadcast(c.room, payload, null);
+            }
+            case "typing" -> broadcast(c.room, Map.of("type", "typing", "from", c.user), c);
+            default -> c.send(Json.write(Map.of("type", "error", "text", "unknown message type")));
+        }
     }
 
     /**
@@ -100,7 +129,11 @@ public class ChatServer {
      *   Remove c from its room (drop the room when it's empty) and tell the others "<user> left".
      */
     static void onClose(Client c) {
-        throw new UnsupportedOperationException("TODO(4) not implemented yet");
+        ROOMS.computeIfPresent(c.room, (room, clients) -> {
+            clients.remove(c);
+            return clients.isEmpty() ? null : clients;
+        });
+        broadcast(c.room, system(c.room, c.user + " left"), null);
     }
 
     // =====================================================================
