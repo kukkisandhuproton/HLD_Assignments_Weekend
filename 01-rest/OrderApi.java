@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.time.LocalDateTime;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -115,7 +116,65 @@ public class OrderApi {
     static void createOrder(HttpExchange ex) throws IOException {
         Map<String, Object> body = Http.body(ex);
         String idemKey = ex.getRequestHeaders().getFirst("Idempotency-Key");
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+
+        System.out.println("idemKey is coming as : " + idemKey);
+
+        // 1. Validate customerId
+        if (body == null || !body.containsKey("customerId")) {
+            Http.send(ex, 400, Map.of("error", "customerId must be a non-blank string"));
+            return;
+        }
+        String customerId = body.get("customerId") instanceof String ? (String) body.get("customerId") : "";
+        if (customerId.isBlank()) {
+            Http.send(ex, 400, Map.of("error", "customerId must be a non-blank string"));
+            return;
+        }
+
+
+        Object itemsObj = body.get("items");
+
+        if (!(itemsObj instanceof List<?>) || ((List<?>) itemsObj).isEmpty()) {
+            Http.send(ex, 400, Map.of("error", "list must be a non-empty list"));
+            return;
+        }
+
+        @SuppressWarnings("unchecked")
+        List<LinkedHashMap<?, ?>> items = (List<LinkedHashMap<?, ?>>) body.get("items");
+
+        Set<String> set = new HashSet<>();
+
+        for(Map.Entry<String, MenuItem> entry: MENU.entrySet()){
+            String  key = entry.getKey();
+            MenuItem value = entry.getValue();
+            set.add(key);
+        }
+        int total = 0;
+        List<Item> itemList = new ArrayList<>();
+
+        for(LinkedHashMap item: items){
+            if(!item.containsKey("itemId") || !set.contains(item.get("itemId"))){
+                Http.send(ex, 400, Map.of("error", "itemId must be a non-blank string or present in menu"));
+                return;
+            }
+            String itemId = item.get("itemId").toString();
+            Number rawQty = (Number) item.get("qty");
+            int qty = rawQty.intValue();
+            if (qty < 1 || qty > 20) {
+                Http.send(ex, 400, Map.of("error", "qty must be between 1 and 20"));
+                return;
+            }
+            Item item1 = new Item(itemId, qty);
+            itemList.add(item1);
+
+            total += (Long)(item.get("qty")) * MENU.get(itemId).price;
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        String orderId = "ord_" + SEQ.incrementAndGet();
+        Order order = new Order(orderId, customerId, itemList, total, Status.PLACED, now.toString());
+        ORDERS.put(orderId, order);
+        ex.getResponseHeaders().set("Location", "/orders/" + orderId);
+        Http.send(ex, 201, order);
     }
 
     /**
@@ -123,8 +182,13 @@ public class OrderApi {
      * TODO(2): return 200 with the order, or 404 {"error": "..."} if it does not exist.
      */
     static void getOrder(HttpExchange ex, String id) throws IOException {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
-    }
+        System.out.println("********** IT HTIS THE METHOD");
+        if(id == null || id.isEmpty() || !ORDERS.containsKey(id)){
+            Http.send(ex, 404, Map.of("error", "id cannot be null or empty"));
+            return;
+        }
+        Order order = ORDERS.get(id);
+        Http.send(ex, 200, order);    }
 
     /**
      * GET /orders?status=PLACED&limit=10&offset=0

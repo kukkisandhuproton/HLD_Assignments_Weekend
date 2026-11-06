@@ -8,13 +8,13 @@ QuickBite's mobile app needs an API to place, view, list and cancel food orders.
 ## Step 0 — Design before you code (10 min, on paper)
 Fill this table **before** opening the code. Then compare with what the code expects.
 
-| User action | Method | Path | Success code | Failure codes |
-|---|---|---|---|---|
-| See the menu | | | | |
-| Place an order | | | | |
-| View one order | | | | |
-| See my orders, 10 at a time | | | | |
-| Cancel an order | | | | |
+| User action | Method | Path              | Success code | Failure codes                                          |
+|---|--------|-------------------|--------------|--------------------------------------------------------|
+| See the menu | Get    | /menu             | 200 OK       | 400 - Bad Request, 401 - Unauthorized, 404 - Not Found |
+| Place an order | Post   | /orders           | 201 Created  | 400 - Bad Request, 401 - Unauthorized, 404 - Not Found |
+| View one order | Get    | /orders/{orderId} | 200 OK       | 400 - Bad Request, 401 - Unauthorized, 404 - Not Found |
+| See my orders, 10 at a time |        |                   |              |                                                        |
+| Cancel an order |        |                   |              |                                                        |
 
 ## Step 1 — Run it
 ```bash
