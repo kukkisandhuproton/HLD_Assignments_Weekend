@@ -123,7 +123,12 @@ public class SseServer {
      * That's the entire protocol. It's just text over a response that never ends.
      */
     static void writeEvent(OutputStream os, int id, String event, String data) throws IOException {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        String message = "id: " + id + "\n"
+                + "event: " + event + "\n"
+                + "data: " + data + "\n\n";
+
+        os.write(message.getBytes(StandardCharsets.UTF_8));
+        os.flush();
     }
 
     /**
@@ -144,7 +149,80 @@ public class SseServer {
      *   A client that disconnects shows up as an IOException on write — just let it end the method.
      */
     static void stream(HttpExchange ex, TrackedOrder order) throws IOException {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        String lastEventId = ex.getRequestHeaders().getFirst("Last-Event-ID");
+        if (lastEventId == null) {
+            lastEventId = Http.query(ex).get("lastEventId");
+        }
+
+        int lastSent = 0;
+        if (lastEventId != null && !lastEventId.isBlank()) {
+            try {
+                lastSent = Integer.parseInt(lastEventId);
+            } catch (NumberFormatException e) {
+                throw new Http.BadRequest("Last-Event-ID must be a number");
+            }
+            if (lastSent < 0) throw new Http.BadRequest("Last-Event-ID cannot be negative");
+        }
+
+        int historySize;
+        boolean alreadyFinished;
+        order.lock.lock();
+        try {
+            historySize = order.history.size();
+            alreadyFinished = order.isDone();
+        } finally {
+            order.lock.unlock();
+        }
+        lastSent = Math.min(lastSent, historySize);
+        if (alreadyFinished && lastSent == historySize) {
+            Http.send(ex, 204, null);
+            return;
+        }
+
+        ex.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+        ex.getResponseHeaders().set("Cache-Control", "no-cache");
+        ex.sendResponseHeaders(200, 0);
+
+        try (OutputStream os = ex.getResponseBody()) {
+            while (true) {
+                List<Map<String, Object>> newEntries = new ArrayList<>();
+                boolean finished;
+                boolean timedOut;
+
+                order.lock.lock();
+                try {
+                    long remaining = TimeUnit.SECONDS.toNanos(15);
+                    while (order.history.size() <= lastSent && !order.isDone() && remaining > 0) {
+                        remaining = order.changed.awaitNanos(remaining);
+                    }
+
+                    int size = order.history.size();
+                    if (size > lastSent) {
+                        newEntries.addAll(order.history.subList(lastSent, size));
+                    }
+                    finished = order.isDone();
+                    timedOut = newEntries.isEmpty() && !finished;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                } finally {
+                    order.lock.unlock();
+                }
+
+                if (timedOut) {
+                    os.write(": keep-alive\n\n".getBytes(StandardCharsets.UTF_8));
+                    os.flush();
+                }
+
+                for (Map<String, Object> entry : newEntries) {
+                    int version = ((Number) entry.get("version")).intValue();
+                    writeEvent(os, version, "status", Json.write(entry));
+                    lastSent = version;
+                }
+
+                if (finished && newEntries.isEmpty()) return;
+            }
+        }
     }
 }
 
