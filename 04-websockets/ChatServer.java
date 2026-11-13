@@ -68,7 +68,10 @@ public class ChatServer {
      * Hints: MessageDigest.getInstance("SHA-1"), Base64.getEncoder()
      */
     static String acceptKey(String secWebSocketKey) throws Exception {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        if (secWebSocketKey == null || secWebSocketKey.isBlank()) throw new IllegalArgumentException("missing Sec-WebSocket-Key");
+        byte[] sha1 = MessageDigest.getInstance("SHA-1")
+                .digest((secWebSocketKey.trim() + WEBSOCKET_GUID).getBytes(StandardCharsets.US_ASCII));
+        return Base64.getEncoder().encodeToString(sha1);
     }
 
     /**
@@ -79,7 +82,12 @@ public class ChatServer {
      *   Use broadcast(...) below.
      */
     static void onOpen(Client c) {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        ROOMS.compute(c.room, (r, members) -> {
+            if (members == null) members = ConcurrentHashMap.newKeySet();
+            members.add(c);
+            return members;
+        });
+        broadcast(c.room, system(c.room, c.user + " joined"), null);
     }
 
     /**
@@ -92,7 +100,22 @@ public class ChatServer {
      *   - anything else                    -> c.send({"type":"error","text":"unknown message type"})
      */
     static void onMessage(Client c, String text) throws IOException {
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+        Object parsed;
+        try { parsed = Json.parse(text); } catch (RuntimeException e) { parsed = null; }
+        Map<?, ?> in = parsed instanceof Map<?, ?> m ? m : Map.of();
+        switch (String.valueOf(in.get("type"))) {
+            case "message" -> {
+                if (!(in.get("text") instanceof String body) || body.isBlank()) return;
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("type", "message");
+                out.put("from", c.user);
+                out.put("text", body);
+                out.put("at", System.currentTimeMillis());
+                broadcast(c.room, out, null);
+            }
+            case "typing" -> broadcast(c.room, Map.of("type", "typing", "from", c.user), c);
+            default -> c.send(Json.write(Map.of("type", "error", "text", "unknown message type")));
+        }
     }
 
     /**
@@ -100,7 +123,13 @@ public class ChatServer {
      *   Remove c from its room (drop the room when it's empty) and tell the others "<user> left".
      */
     static void onClose(Client c) {
-        throw new UnsupportedOperationException("TODO(4) not implemented yet");
+        boolean[] removed = {false};
+        ROOMS.computeIfPresent(c.room, (r, members) -> {
+            removed[0] = members.remove(c);
+            return members.isEmpty() ? null : members;
+        });
+        if (!removed[0]) return;
+        broadcast(c.room, system(c.room, c.user + " left"), null);
     }
 
     // =====================================================================
