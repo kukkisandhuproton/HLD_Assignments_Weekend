@@ -108,7 +108,7 @@ public class PayGateway {
      *   (Why include the timestamp in what we sign? See README question 3.)
      */
     static String signatureHeader(String body, long unixSeconds) {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        return "t=" + unixSeconds + ",v1=" + hmacHex(WEBHOOK_SECRET, unixSeconds + "." + body);
     }
 
     /**
@@ -124,7 +124,34 @@ public class PayGateway {
      *   After MAX_ATTEMPTS failures, print that the event was given up on (real gateways email you).
      */
     static void deliverWithRetries(String url, String eventId, String json) {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        long delayMs = 1000;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofSeconds(5))
+                    .header("Content-Type", "application/json")
+                    .header("QuickPay-Signature", signatureHeader(json, System.currentTimeMillis() / 1000))
+                    .POST(HttpRequest.BodyPublishers.ofString(json))
+                    .build();
+            try {
+                int status = HTTP.send(req, HttpResponse.BodyHandlers.discarding()).statusCode();
+                recordAttempt(eventId, attempt, status);
+                if (status / 100 == 2) return;
+            } catch (IOException e) {
+                recordAttempt(eventId, attempt, e.getClass().getSimpleName() + ": " + e.getMessage());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (attempt == MAX_ATTEMPTS) break;
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            delayMs *= 2;
+        }
+        System.out.println("[webhook] " + eventId + " gave up after " + MAX_ATTEMPTS + " attempts -- merchant must reconcile via GET /payments/{id}");
     }
 
     // ---------------- given ----------------
