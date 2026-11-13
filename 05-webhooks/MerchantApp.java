@@ -112,7 +112,13 @@ public class MerchantApp {
          *     mismatch                                          -> 401
          *   On any 401, also REJECTED.incrementAndGet().
          */
-        // nothing here yet -- so right now ANYONE can POST a fake "payment.succeeded"!
+        String rejection = verifySignature(sigHeader, rawBody);
+        if (rejection != null) {
+            REJECTED.incrementAndGet();
+            System.out.println("[webhook] rejected: " + rejection);
+            Http.send(ex, 401, Map.of("error", rejection));
+            return;
+        }
 
         Map<String, Object> event = Http.parseObject(rawBody);
         String eventId = (String) event.get("id");
@@ -123,7 +129,13 @@ public class MerchantApp {
          *   (200, not 409! A non-2xx would make the gateway retry a duplicate forever.)
          *   Hint: PROCESSED_EVENTS.add(eventId) returns false if it was already there — atomic check-and-set.
          */
-        // nothing here yet -- duplicates get processed twice
+        if (eventId == null) throw new Http.BadRequest("event id is required");
+        if (!PROCESSED_EVENTS.add(eventId)) {
+            DUPLICATES.incrementAndGet();
+            System.out.println("[webhook] duplicate " + eventId + " ignored");
+            Http.send(ex, 200, Map.of("result", "duplicate ignored"));
+            return;
+        }
 
         /*
          * TODO(5): Apply the event.
@@ -131,10 +143,40 @@ public class MerchantApp {
          *   "payment.succeeded" -> status PAID       "payment.failed" -> status PAYMENT_FAILED
          *   Respond 200 {"result":"ok"} quickly. (Slow work like emails belongs in a background job.)
          */
-        throw new UnsupportedOperationException("TODO(5) not implemented yet");
+        String orderId = event.get("data") instanceof Map<?, ?> data && data.get("orderId") instanceof String id ? id : null;
+        Map<String, Object> order = orderId == null ? null : ORDERS.get(orderId);
+        String newStatus = switch (String.valueOf(event.get("type"))) {
+            case "payment.succeeded" -> "PAID";
+            case "payment.failed" -> "PAYMENT_FAILED";
+            default -> null;
+        };
+        if (order == null) System.out.println("[webhook] " + eventId + " for unknown order " + orderId + " -- ignored");
+        else if (newStatus == null) System.out.println("[webhook] " + eventId + " has unhandled type " + event.get("type"));
+        else {
+            order.put("status", newStatus);
+            System.out.println("[webhook] " + eventId + " -> " + orderId + " " + newStatus);
+        }
+        Http.send(ex, 200, Map.of("result", "ok"));
     }
 
-    
+    /** Returns why the signature is invalid, or null if it checks out. */
+    static String verifySignature(String header, String rawBody) {
+        if (header == null) return "missing QuickPay-Signature header";
+        String t = null, v1 = null;
+        for (String part : header.split(",")) {
+            String[] kv = part.trim().split("=", 2);
+            if (kv.length != 2) continue;
+            if (kv[0].equals("t")) t = kv[1];
+            else if (kv[0].equals("v1")) v1 = kv[1];
+        }
+        if (t == null || v1 == null) return "malformed QuickPay-Signature header";
+        long ts;
+        try { ts = Long.parseLong(t); } catch (NumberFormatException e) { return "malformed timestamp"; }
+        if (Math.abs(System.currentTimeMillis() / 1000 - ts) > TOLERANCE_SECONDS) return "timestamp outside tolerance (replay?)";
+        String expected = hmacHex(WEBHOOK_SECRET, t + "." + rawBody);
+        if (!MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), v1.getBytes(StandardCharsets.UTF_8))) return "signature mismatch";
+        return null;
+    }
 
     static String hmacHex(String secret, String message) {
         try {
